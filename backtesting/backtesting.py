@@ -515,11 +515,13 @@ class Trade:
         self.__exit_bar = None  # type: Optional[int]
         self.__sl_order = None  # type: Optional[Order]
         self.__tp_order = None  # type: Optional[Order]
-
+        self.__exit_type = "Saida por max" # type: Optional[String]
+        self.__entry_rule = 0 # type: Optional[int]
+   
     def __repr__(self):
-        return '<Trade size={} time={}-{} price={}-{} pl={:.0f}>'.format(
+        return '<Trade size={} time={}-{} price={}-{} pl={:.0f} entry={} exit={}>'.format(
             self.__size, self.__entry_bar, self.__exit_bar or '',
-            self.__entry_price, self.__exit_price or '', self.pl)
+            self.__entry_price, self.__exit_price or '', self.pl, self.__entry_rule,  self.__exit_type)
 
     def _replace(self, **kwargs):
         for k, v in kwargs.items():
@@ -537,6 +539,21 @@ class Trade:
         self.__broker.orders.insert(0, order)
 
     # Fields getters
+    @property
+    def motivoSaida(self):
+        return self.__exit_type
+
+    @motivoSaida.setter
+    def motivoSaida(self, motivo):
+        self.__exit_type = motivo
+
+    @property
+    def motivoEntrada(self):
+        return self.__entry_rule
+
+    @motivoEntrada.setter
+    def motivoEntrada(self, entryRule):
+        self.__entry_rule = entryRule
 
     @property
     def size(self):
@@ -793,13 +810,13 @@ class _Broker:
             # Determine purchase price.
             # Check if limit order can be filled.
             if order.limit:
-                is_limit_hit = low < order.limit if order.is_long else high > order.limit
+                is_limit_hit = low <= order.limit if order.is_long else high >= order.limit
                 # When stop and limit are hit within the same bar, we pessimistically
                 # assume limit was hit before the stop (i.e. "before it counts")
                 is_limit_hit_before_stop = (is_limit_hit and
-                                            (order.limit < (stop_price or -np.inf)
+                                            (order.limit <= (stop_price or -np.inf)
                                              if order.is_long
-                                             else order.limit > (stop_price or np.inf)))
+                                             else order.limit >= (stop_price or np.inf)))
                 if not is_limit_hit or is_limit_hit_before_stop:
                     continue
 
@@ -971,7 +988,8 @@ class Backtest:
                  margin: float = 1.,
                  trade_on_close=False,
                  hedging=False,
-                 exclusive_orders=False
+                 exclusive_orders=False,
+                 fixedCommission: float = 0.0
                  ):
         """
         Initialize a backtest. Requires data and a strategy to test.
@@ -1069,6 +1087,7 @@ class Backtest:
         )
         self._strategy = strategy
         self._results = None
+        self._fixedCommision = fixedCommission
 
     def run(self, **kwargs) -> pd.Series:
         """
@@ -1348,6 +1367,8 @@ class Backtest:
             'ReturnPct': [t.pl_pct for t in trades],
             'EntryTime': [t.entry_time for t in trades],
             'ExitTime': [t.exit_time for t in trades],
+            'MotivoEntrada': [t.motivoEntrada for t in trades],
+            'MotivoSaida': [t.motivoSaida for t in trades],
         })
         trades_df['Duration'] = trades_df['ExitTime'] - trades_df['EntryTime']
 
@@ -1371,16 +1392,29 @@ class Backtest:
             have_position[t.entry_bar:t.exit_bar + 1] = 1  # type: ignore
 
         s.loc['Exposure Time [%]'] = have_position.mean() * 100  # In "n bars" time, not index time
-        s.loc['Equity Final [$]'] = equity[-1]
+        if (self._fixedCommision > 0.0) :
+            s.loc['Equity Final [$]'] = equity[-1] - (len(trades)*self._fixedCommision)
+        else:
+            s.loc['Equity Final [$]'] = equity[-1]
         s.loc['Equity Peak [$]'] = equity.max()
-        s.loc['Return [%]'] = (equity[-1] - equity[0]) / equity[0] * 100
+        if (self._fixedCommision > 0.0) :
+            s.loc['Net profit'] = (equity[-1] - (len(trades)*self._fixedCommision)) - equity[0]
+        else:
+            s.loc['Net profit'] = equity[-1] - equity[0]
+        if (self._fixedCommision > 0.0) :
+            s.loc['Return [%]'] = ((equity[-1] - (len(trades)*self._fixedCommision)) - equity[0]) / equity[0] * 100
+        else:
+            s.loc['Return [%]'] = (equity[-1] - equity[0]) / equity[0] * 100
         c = data.Close.values
+
         s.loc['Buy & Hold Return [%]'] = abs(c[-1] - c[0]) / c[0] * 100  # long OR short
         s.loc['Max. Drawdown [%]'] = max_dd = -np.nan_to_num(dd.max()) * 100
         s.loc['Avg. Drawdown [%]'] = -dd_peaks.mean() * 100
         s.loc['Max. Drawdown Duration'] = _round_timedelta(dd_dur.max())
         s.loc['Avg. Drawdown Duration'] = _round_timedelta(dd_dur.mean())
         s.loc['# Trades'] = n_trades = len(trades)
+        s.loc['# Comissions'] = (-1.0) * (len(trades)*self._fixedCommision)
+
         s.loc['Win Rate [%]'] = win_rate = np.nan if not n_trades else (pl > 0).sum() / n_trades * 100  # noqa: E501
         s.loc['Best Trade [%]'] = returns.max() * 100
         s.loc['Worst Trade [%]'] = returns.min() * 100
