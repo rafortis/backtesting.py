@@ -680,7 +680,7 @@ class Trade:
 
 class _Broker:
     def __init__(self, *, data, cash, commission, margin,
-                 trade_on_close, hedging, exclusive_orders, index):
+                 trade_on_close, hedging, exclusive_orders, index, tradeOnHit):
         assert 0 < cash, "cash shosuld be >0, is {}".format(cash)
         assert 0 <= commission < .1, "commission should be between 0-10%, is {}".format(commission)
         assert 0 < margin <= 1, "margin should be between 0 and 1, is {}".format(margin)
@@ -691,6 +691,7 @@ class _Broker:
         self._trade_on_close = trade_on_close
         self._hedging = hedging
         self._exclusive_orders = exclusive_orders
+        self._trade_on_hit = tradeOnHit
 
         self._equity = np.tile(np.nan, len(index))
         self.orders = []  # type: List[Order]
@@ -810,15 +811,24 @@ class _Broker:
             # Determine purchase price.
             # Check if limit order can be filled.
             if order.limit:
-                is_limit_hit = low <= order.limit if order.is_long else high >= order.limit
-                # When stop and limit are hit within the same bar, we pessimistically
-                # assume limit was hit before the stop (i.e. "before it counts")
-                is_limit_hit_before_stop = (is_limit_hit and
-                                            (order.limit <= (stop_price or -np.inf)
-                                             if order.is_long
-                                             else order.limit >= (stop_price or np.inf)))
-                if not is_limit_hit or is_limit_hit_before_stop:
-                    continue
+                if self._trade_on_hit:
+                    is_limit_hit = low <= order.limit if order.is_long else high >= order.limit
+                    is_limit_hit_before_stop = (is_limit_hit and
+                                                (order.limit <= (stop_price or -np.inf)
+                                                if order.is_long
+                                                else order.limit >= (stop_price or np.inf)))
+                    if not is_limit_hit or is_limit_hit_before_stop:
+                        continue
+                else:
+                    is_limit_hit = low < order.limit if order.is_long else high > order.limit
+                    # When stop and limit are hit within the same bar, we pessimistically
+                    # assume limit was hit before the stop (i.e. "before it counts")
+                    is_limit_hit_before_stop = (is_limit_hit and
+                                                (order.limit < (stop_price or -np.inf)
+                                                if order.is_long
+                                                else order.limit > (stop_price or np.inf)))
+                    if not is_limit_hit or is_limit_hit_before_stop:
+                        continue
 
                 # stop_price, if set, was hit within this bar
                 price = (min(open, order.limit, stop_price or np.inf)
@@ -989,7 +999,8 @@ class Backtest:
                  trade_on_close=False,
                  hedging=False,
                  exclusive_orders=False,
-                 fixedCommission: float = 0.0
+                 fixedCommission: float = 0.0,
+                 tradeOnHit=False
                  ):
         """
         Initialize a backtest. Requires data and a strategy to test.
@@ -1084,6 +1095,7 @@ class Backtest:
             _Broker, cash=cash, commission=commission, margin=margin,
             trade_on_close=trade_on_close, hedging=hedging,
             exclusive_orders=exclusive_orders, index=data.index,
+            tradeOnHit=tradeOnHit,
         )
         self._strategy = strategy
         self._results = None
