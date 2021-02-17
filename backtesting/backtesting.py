@@ -1000,6 +1000,7 @@ class Backtest:
                  hedging=False,
                  exclusive_orders=False,
                  fixedCommission: float = 0.0,
+                 boxSize: float = 30000.0,
                  tradeOnHit=False
                  ):
         """
@@ -1100,6 +1101,7 @@ class Backtest:
         self._strategy = strategy
         self._results = None
         self._fixedCommision = fixedCommission
+        self._boxSize = boxSize
 
     def run(self, **kwargs) -> pd.Series:
         """
@@ -1360,6 +1362,7 @@ class Backtest:
 
         equity = pd.Series(broker._equity).bfill().fillna(broker._cash).values
         dd = 1 - equity / np.maximum.accumulate(equity)
+        ddBox = 1 - (equity-(equity[0] - self._boxSize)) / np.maximum.accumulate((equity-(equity[0] - self._boxSize)))
         dd_dur, dd_peaks = self._compute_drawdown_duration_peaks(pd.Series(dd, index=data.index))
 
         equity_df = pd.DataFrame({
@@ -1417,10 +1420,16 @@ class Backtest:
             s.loc['Return [%]'] = ((equity[-1] - (len(trades)*self._fixedCommision)) - equity[0]) / equity[0] * 100
         else:
             s.loc['Return [%]'] = (equity[-1] - equity[0]) / equity[0] * 100
+        if (self._fixedCommision > 0.0) :
+            s.loc['Return Box[%]'] = ((equity[-1] - (len(trades)*self._fixedCommision)) - equity[0]) / self._boxSize * 100
+        else:
+            s.loc['Return Box[%]'] = (equity[-1] - equity[0]) / self._boxSize * 100
         c = data.Close.values
 
         s.loc['Buy & Hold Return [%]'] = abs(c[-1] - c[0]) / c[0] * 100  # long OR short
         s.loc['Max. Drawdown [%]'] = max_dd = -np.nan_to_num(dd.max()) * 100
+        s.loc['Max. Drawdown [$]'] = -(np.nan_to_num(dd.max()) * np.maximum.accumulate(equity)).max()
+        s.loc['Max. Box Drawdown [%]'] = -np.nan_to_num(ddBox.max()) * 100
         s.loc['Avg. Drawdown [%]'] = -dd_peaks.mean() * 100
         s.loc['Max. Drawdown Duration'] = _round_timedelta(dd_dur.max())
         s.loc['Avg. Drawdown Duration'] = _round_timedelta(dd_dur.mean())
