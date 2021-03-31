@@ -1400,8 +1400,9 @@ class Backtest:
         s = pd.Series(dtype=object)
         s.loc['Start'] = index[0]
         s.loc['End'] = index[-1]
-        s.loc['Duration'] = s.End - s.Start
-
+        s.loc['Duration'] = s.End - s.Start        
+        years_dur = s.loc['Duration']/365        
+        s.loc['Years'] = years_dur.days + (years_dur.seconds/(3600*24))
         have_position = np.repeat(0, len(index))
         for t in trades:
             have_position[t.entry_bar:t.exit_bar + 1] = 1  # type: ignore
@@ -1425,6 +1426,8 @@ class Backtest:
         else:
             s.loc['Return Box[%]'] = (equity[-1] - equity[0]) / self._boxSize * 100
         c = data.Close.values
+        s.loc['Yearly Return[%]'] = (s.loc['Return [%]'])/s.loc['Years']
+        s.loc['Yearly Return Box[%]'] = (s.loc['Return Box[%]'])/s.loc['Years']
 
         s.loc['Buy & Hold Return [%]'] = abs(c[-1] - c[0]) / c[0] * 100  # long OR short
         s.loc['Max. Drawdown [%]'] = max_dd = -np.nan_to_num(dd.max()) * 100
@@ -1450,6 +1453,7 @@ class Backtest:
         s.loc['Sharpe Ratio'] = mean_return / (returns.std() or np.nan)
         s.loc['Sortino Ratio'] = mean_return / (returns[returns < 0].std() or np.nan)
         s.loc['Calmar Ratio'] = mean_return / ((-max_dd / 100) or np.nan)
+        s.loc['Calmar Ratio alt'] = s.loc['Yearly Return Box[%]']  / ((-s.loc['Max. Box Drawdown [%]'] ) or np.nan)
 
         s.loc['_strategy'] = strategy
         s.loc['_equity_curve'] = equity_df
