@@ -2,17 +2,20 @@
 
 Backtesting.py
 ==============
-[![Build Status](https://img.shields.io/travis/kernc/backtesting.py.svg?style=for-the-badge)](https://travis-ci.org/kernc/backtesting.py)
+[![Build Status](https://img.shields.io/github/workflow/status/kernc/backtesting.py/CI/master?style=for-the-badge)](https://github.com/kernc/backtesting.py/actions)
 [![Code Coverage](https://img.shields.io/codecov/c/gh/kernc/backtesting.py.svg?style=for-the-badge)](https://codecov.io/gh/kernc/backtesting.py)
 [![Backtesting on PyPI](https://img.shields.io/pypi/v/backtesting.svg?color=blue&style=for-the-badge)](https://pypi.org/project/backtesting)
+[![PyPI downloads](https://img.shields.io/pypi/dd/backtesting.svg?color=skyblue&style=for-the-badge)](https://pypi.org/project/backtesting)
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/kernc?color=pink&style=for-the-badge)](https://github.com/sponsors/kernc)
 
 Backtest trading strategies with Python.
 
-[**Project website**][website]
+[**Project website**](https://kernc.github.io/backtesting.py)
 
 [Documentation]
 
-[website]: https://kernc.github.io/backtesting.py/
+[![Star](https://i.imgur.com/LSI6p6O.png)](#top) the project if you use it.
+
 [Documentation]: https://kernc.github.io/backtesting.py/doc/backtesting/
 
 
@@ -61,6 +64,11 @@ Equity Final [$]                     68935.12
 Equity Peak [$]                      68991.22
 Return [%]                             589.35
 Buy & Hold Return [%]                  703.46
+Return (Ann.) [%]                       25.42
+Volatility (Ann.) [%]                   38.43
+Sharpe Ratio                             0.66
+Sortino Ratio                            1.30
+Calmar Ratio                             0.77
 Max. Drawdown [%]                      -33.08
 Avg. Drawdown [%]                       -5.58
 Max. Drawdown Duration      688 days 00:00:00
@@ -75,12 +83,10 @@ Avg. Trade Duration          32 days 00:00:00
 Profit Factor                            2.13
 Expectancy [%]                           6.91
 SQN                                      1.78
-Sharpe Ratio                             0.18
-Sortino Ratio                            0.44
-Calmar Ratio                             0.06
 _strategy              SmaCross(n1=10, n2=20)
 _equity_curve                          Equ...
 _trades                       Size  EntryB...
+dtype: object
 ```
 [![plot of trading simulation](https://i.imgur.com/xRFNHfg.png)](https://kernc.github.io/backtesting.py/#example)
 
@@ -97,99 +103,9 @@ Features
 * Detailed results
 * Interactive visualizations
 
-
 Alternatives
 ------------
-The thing with backtesting is, unless you dug into the dirty details yourself,
-you can't rely on execution correctness, and you may lose your house.
-In addition, everyone has their own preconveived ideas about how a mechanical
-trading strategy should be conducted, so everyone (and their brothers)
-just rolls their own backtesting frameworks.
+See [alternatives.md] for a list of alternative Python
+backtesting frameworks and related packages.
 
-If after reviewing the docs and exmples perchance you find
-[_Backtesting.py_][website] is not your cup of tea,
-you can have a look at some similar alternative Python backtesting frameworks:
-
-- [bt](http://pmorissette.github.io/bt/) -
-  a framework based on reusable and flexible blocks of
-  strategy logic that support multiple instruments and
-  output detailed statistics and useful charts.
-- [vectorbt](https://polakowo.io/vectorbt/) -
-  a pandas-based library for quickly analyzing trading strategies at scale.
-- [Backtrader](https://www.backtrader.com/) -
-  a pure-python feature-rich framework for backtesting
-  and live algotrading with a few brokers.
-- [PyAlgoTrade](https://gbeced.github.io/pyalgotrade/) -
-  event-driven algorithmic trading library with focus on
-  backtesting and support for live trading.
-- [Zipline](https://www.zipline.io/) -
-  the backtesting and live-trading engine powering Quantopian — the
-  community-centered, hosted platform for building and executing strategies.
-- [Pinkfish](http://fja05680.github.io/pinkfish/) -
-  a lightweight backtester for intraday strategies on daily data.
-- [finmarketpy](https://github.com/cuemacro/finmarketpy) -
-  a library for analyzing financial market data.
-- [QuantStart QSTrader](https://github.com/mhallsmoore/qstrader/) -
-  a modular schedule-driven backtesting framework for long-short equities
-  and ETF-based systematic trading strategies.
-- [pysystemtrade](https://github.com/robcarver17/pysystemtrade) -
-  the open-source version of Robert Carver's backtesting engine that
-  implements systems according to his book _Systematic Trading:
-  A unique new method for designing trading and investing systems_.
-- [QTPyLib](https://github.com/ranaroussi/qtpylib) -
-  a versatile, event-driven algorithmic trading library.
-- [Gemini](https://github.com/anfederico/Gemini) -
-  a backtester namely focusing on cryptocurrency markets.
-- [Quantdom](https://github.com/constverum/Quantdom) -
-  a Qt-based framework that lets you focus on modeling financial strategies,
-  portfolio management, and analyzing backtests.
-- [Clairvoyant](https://github.com/anfederico/Clairvoyant) -
-  software for identifying and monitoring social / historical cues
-  for short-term stock movement.
-- [optopsy](https://github.com/michaelchu/optopsy) -
-  a nimble backtesting library for options trading.
-- [RQalpha](https://github.com/ricequant/rqalpha) -
-  a complete solution for programmatic traders from data acquisition,
-  algorithmic trading, backtesting, real-time simulation, live trading
-  to mere data analysis. Documentation in Chinese.
-- [zvt](https://github.com/zvtvz/zvt) -
-  a quant trading platform which includes data recorder, factor calculation,
-  stock picking, backtesting, and unified visualization. Documentation in Chinese.
-- [AwesomeQuant](https://github.com/wilsonfreitas/awesome-quant#trading--backtesting) -
-  A somewhat curated list of libraries, packages, and resources for quants.
-
-#### Obsolete / Unmaintained
-
-The following projects are mainly old, stale, incomplete, incompatible,
-abandoned, and here for posterity reference only:
-
-- [AlephNull](https://github.com/CarterBain/AlephNull) -
-  extends the features of Zipline, for use within an institutional environment.
-- [ProfitPy](https://code.google.com/p/profitpy/) -
-  a set of libraries and tools for the development, testing, and execution of
-  automated stock trading systems.
-- [prophet](https://github.com/Emsu/prophet) -
-  a microframework for financial markets, focusing on modeling
-  strategies and portfolio management.
-- [pybacktest](https://github.com/ematvey/pybacktest) -
-  a vectorized pandas-based backtesting framework,
-  designed to make backtesting compact, simple and fast.
-- [quant](https://github.com/maihde/quant) -
-  a technical analysis tool for trading strategies with a particularily
-  simplistic view of the market.
-- [QuantSoftware Toolkit](https://github.com/QuantSoftware/QuantSoftwareToolkit) -
-  a toolkit by the guys that soon after went to form Lucena Research.
-- [QuantStart QSForex](https://github.com/mhallsmoore/qsforex) -
-  an event-driven backtesting and live-trading platform for use in
-  the foreign exchange markets,
-- [tia: Toolkit for integration and analysis](https://github.com/PaulMest/tia/) -
-  a toolkit providing Bloomberg data access, PDF generation,
-  technical analysis and backtesting functionality.
-- [TradingWithPython](https://github.com/sjev/trading-with-python) -
-  boiler-plate code for the (no longer active) course _Trading With Python_.
-- [Ultra-Finance](https://github.com/panpanpandas/ultrafinance) -
-  real-time financial data collection, analyzing and backtesting trading strategies.
-- [visualize-wealth](https://github.com/benjaminmgross/visualize-wealth) -
-  a library to construct, backtest, analyze, and evaluate portfolios
-  and their benchmarks, with comprehensive documentation illustrating
-  all underlying methodologies and statistics.
+[alternatives.md]: https://github.com/kernc/backtesting.py/blob/master/doc/alternatives.md

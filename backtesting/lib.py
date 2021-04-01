@@ -60,7 +60,7 @@ e.g.
 """
 
 _EQUITY_AGG = {
-    'Equity': 'mean',
+    'Equity': 'last',
     'DrawdownPct': 'max',
     'DrawdownDuration': 'max',
 }
@@ -129,6 +129,13 @@ def plot_heatmaps(heatmap: pd.Series,
     aggregated by 'max' function by default. This can be tweaked
     with `agg` parameter, which accepts any argument pandas knows
     how to aggregate by.
+
+    .. todo::
+        Lay heatmaps out lower-triangular instead of in a simple grid.
+        Like [`skopt.plots.plot_objective()`][plot_objective] does.
+
+    [plot_objective]: \
+        https://scikit-optimize.github.io/stable/modules/plots.html#plot-objective
     """
     return _plot_heatmaps(heatmap, agg, ncols, filename, plot_width, open_browser)
 
@@ -161,7 +168,7 @@ def resample_apply(rule: str,
                    func: Optional[Callable[..., Sequence]],
                    series: Union[pd.Series, pd.DataFrame, _Array],
                    *args,
-                   agg: str = 'last',
+                   agg: Union[str, dict] = None,
                    **kwargs):
     """
     Apply `func` (such as an indicator) to `series`, resampled to
@@ -185,8 +192,12 @@ http://pandas.pydata.org/pandas-docs/stable/timeseries.html#offset-aliases
     has a datetime index.
 
     `agg` is the aggregation function to use on resampled groups of data.
-    Default value is `"last"`, which may be suitable for closing prices,
-    but you might prefer another (e.g. 'max' for peaks, or similar).
+    Valid values are anything accepted by `pandas/resample/.agg()`.
+    Default value for dataframe input is `OHLCV_AGG` dictionary.
+    Default value for series input is the appropriate entry from `OHLCV_AGG`
+    if series has a matching name, or otherwise the value `"last"`,
+    which is suitable for closing prices,
+    but you might prefer another (e.g. `"max"` for peaks, or similar).
 
     Finally, any `*args` and `**kwargs` that are not already eaten by
     implicit `backtesting.backtesting.Strategy.I` call
@@ -240,6 +251,12 @@ http://pandas.pydata.org/pandas-docs/stable/timeseries.html#offset-aliases
             'or a `Strategy.data.*` array'
         series = series.s
 
+    if agg is None:
+        agg = OHLCV_AGG.get(getattr(series, 'name', None), 'last')
+        if isinstance(series, pd.DataFrame):
+            agg = {column: OHLCV_AGG.get(column, 'last')
+                   for column in series.columns}
+
     resampled = series.resample(rule, label='right').agg(agg).dropna()
     resampled.name = _as_str(series) + '[' + rule + ']'
 
@@ -265,9 +282,9 @@ http://pandas.pydata.org/pandas-docs/stable/timeseries.html#offset-aliases
             elif result.ndim == 2:
                 result = pd.DataFrame(result.T)
         # Resample back to data index
-        if not result.index.is_all_dates:
+        if not isinstance(result.index, pd.DatetimeIndex):
             result.index = resampled.index
-        result = result.reindex(index=series.index | resampled.index,
+        result = result.reindex(index=series.index.union(resampled.index),
                                 method='ffill').reindex(series.index)
         return result
 
@@ -275,6 +292,43 @@ http://pandas.pydata.org/pandas-docs/stable/timeseries.html#offset-aliases
 
     array = strategy_I(wrap_func, resampled, *args, **kwargs)
     return array
+
+
+def random_ohlc_data(example_data: pd.DataFrame, *,
+                     frac=1., random_state: int = None) -> pd.DataFrame:
+    """
+    OHLC data generator. The generated OHLC data has basic
+    [descriptive statistics](https://en.wikipedia.org/wiki/Descriptive_statistics)
+    similar to the provided `example_data`.
+
+    `frac` is a fraction of data to sample (with replacement). Values greater
+    than 1 result in oversampling.
+
+    Such random data can be effectively used for stress testing trading
+    strategy robustness, Monte Carlo simulations, significance testing, etc.
+
+    >>> from backtesting.test import EURUSD
+    >>> ohlc_generator = random_ohlc_data(EURUSD)
+    >>> next(ohlc_generator)  # returns new random data
+    ...
+    >>> next(ohlc_generator)  # returns new random data
+    ...
+    """
+    def shuffle(x):
+        return x.sample(frac=frac, replace=frac > 1, random_state=random_state)
+
+    if len(example_data.columns.intersection({'Open', 'High', 'Low', 'Close'})) != 4:
+        raise ValueError("`data` must be a pandas.DataFrame with columns "
+                         "'Open', 'High', 'Low', 'Close'")
+    while True:
+        df = shuffle(example_data)
+        df.index = example_data.index
+        padding = df.Close - df.Open.shift(-1)
+        gaps = shuffle(example_data.Open.shift(-1) - example_data.Close)
+        deltas = (padding + gaps).shift(1).fillna(0).cumsum()
+        for key in ('Open', 'High', 'Low', 'Close'):
+            df[key] += deltas
+        yield df
 
 
 class SignalStrategy(Strategy):
@@ -302,8 +356,6 @@ class SignalStrategy(Strategy):
     __entry_signal = (0,)
     __exit_signal = (False,)
 
-    __pdoc__['SignalStrategy.__init__'] = False
-
     def set_signal(self, entry_size: Sequence[float],
                    exit_portion: Sequence[float] = None,
                    *,
@@ -322,12 +374,12 @@ class SignalStrategy(Strategy):
         If `plot` is `True`, the signal entry/exit indicators are plotted when
         `backtesting.backtesting.Backtest.plot` is called.
         """
-        self.__entry_signal = self.I(
+        self.__entry_signal = self.I(  # type: ignore
             lambda: pd.Series(entry_size, dtype=float).replace(0, np.nan),
             name='entry size', plot=plot, overlay=False, scatter=True, color='black')
 
         if exit_portion is not None:
-            self.__exit_signal = self.I(
+            self.__exit_signal = self.I(  # type: ignore
                 lambda: pd.Series(exit_portion, dtype=float).replace(0, np.nan),
                 name='exit portion', plot=plot, overlay=False, scatter=True, color='black')
 
@@ -366,8 +418,6 @@ class TrailingStrategy(Strategy):
     __n_atr = 6.
     __atr = None
 
-    __pdoc__['SignalStrategy.__init__'] = False
-
     def init(self):
         super().init()
         self.set_atr_periods()
@@ -398,6 +448,12 @@ class TrailingStrategy(Strategy):
             else:
                 trade.sl = min(trade.sl or np.inf,
                                self.data.Close[-1] + self.__atr[-1] * self.__n_atr)
+
+
+# Prevent pdoc3 documenting __init__ signature of Strategy subclasses
+for cls in list(globals().values()):
+    if isinstance(cls, type) and issubclass(cls, Strategy):
+        __pdoc__[f'{cls.__name__}.__init__'] = False
 
 
 # NOTE: Don't put anything below this __all__ list

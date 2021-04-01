@@ -37,7 +37,7 @@ def _as_list(value) -> List:
 def _data_period(index) -> Union[pd.Timedelta, Number]:
     """Return data index period as pd.Timedelta"""
     values = pd.Series(index[-100:])
-    return values.diff().median()
+    return values.diff().dropna().median()
 
 
 class _Array(np.ndarray):
@@ -55,6 +55,16 @@ class _Array(np.ndarray):
         if obj is not None:
             self.name = getattr(obj, 'name', '')
             self._opts = getattr(obj, '_opts', {})
+
+    # Make sure properties name and _opts are carried over
+    # when (un-)pickling.
+    def __reduce__(self):
+        value = super().__reduce__()
+        return value[:2] + (value[2] + (self.__dict__,),)
+
+    def __setstate__(self, state):
+        self.__dict__.update(state[-1])
+        super().__setstate__(state[:-1])
 
     def __bool__(self):
         try:
@@ -75,13 +85,14 @@ class _Array(np.ndarray):
     @property
     def s(self) -> pd.Series:
         values = np.atleast_2d(self)
-        return pd.Series(values[0], index=self._opts['data'].index, name=self.name)
+        index = self._opts['index'][:values.shape[1]]
+        return pd.Series(values[0], index=index, name=self.name)
 
     @property
     def df(self) -> pd.DataFrame:
         values = np.atleast_2d(np.asarray(self))
-        df = pd.DataFrame(values.T, index=self._opts['data'].index,
-                          columns=[self.name] * len(values))
+        index = self._opts['index'][:values.shape[1]]
+        df = pd.DataFrame(values.T, index=index, columns=[self.name] * len(values))
         return df
 
 
@@ -99,9 +110,9 @@ class _Data:
     def __init__(self, df: pd.DataFrame):
         self.__df = df
         self.__i = len(df)
-        self.__pip = None   # type: Optional[float]
-        self.__cache = {}   # type: Dict[str, _Array]
-        self.__arrays = {}  # type: Dict[str, _Array]
+        self.__pip: Optional[float] = None
+        self.__cache: Dict[str, _Array] = {}
+        self.__arrays: Dict[str, _Array] = {}
         self._update()
 
     def __getitem__(self, item):
@@ -111,23 +122,24 @@ class _Data:
         try:
             return self.__get_array(item)
         except KeyError:
-            raise AttributeError("Column '{}' not in data".format(item)) from None
+            raise AttributeError(f"Column '{item}' not in data") from None
 
     def _set_length(self, i):
         self.__i = i
         self.__cache.clear()
 
     def _update(self):
-        self.__arrays = {col: _Array(arr, data=self)
+        index = self.__df.index.copy()
+        self.__arrays = {col: _Array(arr, index=index)
                          for col, arr in self.__df.items()}
         # Leave index as Series because pd.Timestamp nicer API to work with
-        self.__arrays['__index'] = self.__df.index.copy()
+        self.__arrays['__index'] = index
 
     def __repr__(self):
         i = min(self.__i, len(self.__df) - 1)
-        return '<Data i={} ({}) {}>'.format(i, self.__arrays['__index'][i],
-                                            ', '.join('{}={}'.format(k, v)
-                                                      for k, v in self.__df.iloc[i].items()))
+        index = self.__arrays['__index'][i]
+        items = ', '.join(f'{k}={v}' for k, v in self.__df.iloc[i].items())
+        return f'<Data i={i} ({index}) {items}>'
 
     def __len__(self):
         return self.__i

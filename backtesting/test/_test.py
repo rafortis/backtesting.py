@@ -4,6 +4,7 @@ import sys
 import time
 import unittest
 import warnings
+from concurrent.futures.process import ProcessPoolExecutor
 from contextlib import contextmanager
 from glob import glob
 from runpy import run_path
@@ -24,7 +25,8 @@ from backtesting.lib import (
     SignalStrategy,
     TrailingStrategy,
     resample_apply,
-    plot_heatmaps
+    plot_heatmaps,
+    random_ohlc_data,
 )
 from backtesting.test import GOOG, EURUSD, SMA
 from backtesting._util import _Indicator, _as_str, _Array, try_
@@ -82,7 +84,7 @@ class TestBacktest(TestCase):
         start = time.process_time()
         bt.run()
         end = time.process_time()
-        self.assertLess(end - start, .2)
+        self.assertLess(end - start, .3)
 
     def test_data_missing_columns(self):
         df = GOOG.copy(deep=False)
@@ -213,7 +215,7 @@ class TestBacktest(TestCase):
         bt = Backtest(GOOG, Assertive)
         with self.assertWarns(UserWarning):
             stats = bt.run()
-        self.assertEqual(stats['# Trades'], 144)
+        self.assertEqual(stats['# Trades'], 145)
 
     def test_broker_params(self):
         bt = Backtest(GOOG.iloc[:100], SmaCross,
@@ -247,45 +249,53 @@ class TestBacktest(TestCase):
 
     def test_compute_stats(self):
         stats = Backtest(GOOG, SmaCross).run()
-        # Pandas compares in 'almost equal' manner
-        from pandas.testing import assert_series_equal
-        assert_series_equal(
-            stats.filter(regex='^[^_]').sort_index(),
-            pd.Series({
+        expected = pd.Series({
                 # NOTE: These values are also used on the website!
-                '# Trades': 65,
+                '# Trades': 66,
                 'Avg. Drawdown Duration': pd.Timedelta('41 days 00:00:00'),
                 'Avg. Drawdown [%]': -5.925851581948801,
                 'Avg. Trade Duration': pd.Timedelta('46 days 00:00:00'),
-                'Avg. Trade [%]': 2.3537113951143773,
+                'Avg. Trade [%]': 2.531715975158555,
                 'Best Trade [%]': 53.59595229490424,
                 'Buy & Hold Return [%]': 703.4582419772772,
-                'Calmar Ratio': 0.049055964204885415,
+                'Calmar Ratio': 0.4414380935608377,
                 'Duration': pd.Timedelta('3116 days 00:00:00'),
                 'End': pd.Timestamp('2013-03-01 00:00:00'),
-                'Equity Final [$]': 51959.94999999997,
+                'Equity Final [$]': 51422.98999999996,
                 'Equity Peak [$]': 75787.44,
-                'Expectancy [%]': 8.791710931051735,
-                'Exposure Time [%]': 93.99441340782123,
+                'Expectancy [%]': 3.2748078066748834,
+                'Exposure Time [%]': 96.74115456238361,
                 'Max. Drawdown Duration': pd.Timedelta('584 days 00:00:00'),
                 'Max. Drawdown [%]': -47.98012705007589,
                 'Max. Trade Duration': pd.Timedelta('183 days 00:00:00'),
-                'Profit Factor': 2.0880175388920286,
-                'Return [%]': 419.59949999999964,
-                'SQN': 0.916892986080858,
-                'Sharpe Ratio': 0.17914126763602636,
-                'Sortino Ratio': 0.5588698138148217,
+                'Profit Factor': 2.167945974262033,
+                'Return (Ann.) [%]': 21.180255813792282,
+                'Return [%]': 414.2298999999996,
+                'Volatility (Ann.) [%]': 36.49390889140787,
+                'SQN': 1.0766187356697705,
+                'Sharpe Ratio': 0.5803778344714113,
+                'Sortino Ratio': 1.0847880675854096,
                 'Start': pd.Timestamp('2004-08-19 00:00:00'),
-                'Win Rate [%]': 46.15384615384615,
+                'Win Rate [%]': 46.96969696969697,
                 'Worst Trade [%]': -18.39887353835481,
-            }).sort_index()
-        )
+        })
+
+        def almost_equal(a, b):
+            try:
+                return np.isclose(a, b, rtol=1.e-8)
+            except TypeError:
+                return a == b
+
+        diff = {key: print(key) or value
+                for key, value in stats.filter(regex='^[^_]').items()
+                if not almost_equal(value, expected[key])}
+        self.assertDictEqual(diff, {})
 
         self.assertSequenceEqual(
             sorted(stats['_equity_curve'].columns),
             sorted(['Equity', 'DrawdownPct', 'DrawdownDuration']))
 
-        self.assertEqual(len(stats['_trades']), 65)
+        self.assertEqual(len(stats['_trades']), 66)
 
         self.assertSequenceEqual(
             sorted(stats['_trades'].columns),
@@ -377,6 +387,27 @@ class TestBacktest(TestCase):
         bt = Backtest(GOOG, SmaCross, commission=.002)
         bt.run()
 
+    def test_close_orders_from_last_strategy_iteration(self):
+        class S(Strategy):
+            def init(self): pass
+
+            def next(self):
+                if not self.position:
+                    self.buy()
+                elif len(self.data) == len(SHORT_DATA):
+                    self.position.close()
+
+        self.assertFalse(Backtest(SHORT_DATA, S).run()._trades.empty)
+
+    def test_check_adjusted_price_when_placing_order(self):
+        class S(Strategy):
+            def init(self): pass
+
+            def next(self):
+                self.buy(tp=self.data.Close * 1.01)
+
+        self.assertRaises(ValueError, Backtest(SHORT_DATA, S, commission=.02).run)
+
 
 class TestStrategy(TestCase):
     def _Backtest(self, strategy_coroutine, **kwargs):
@@ -434,6 +465,43 @@ class TestStrategy(TestCase):
 
         self._Backtest(coroutine, exclusive_orders=True).run()
 
+    def test_trade_multiple_close(self):
+        def coroutine(self):
+            yield self.buy()
+
+            assert self.trades
+            self.trades[-1].close(1)
+            self.trades[-1].close(.1)
+            yield
+
+        self._Backtest(coroutine).run()
+
+    def test_close_trade_leaves_needsize_0(self):
+        def coroutine(self):
+            self.buy(size=1)
+            self.buy(size=1)
+            yield
+            if self.position:
+                self.sell(size=1)
+
+        self._Backtest(coroutine).run()
+
+    def test_stop_limit_order_price_is_stop_price(self):
+        def coroutine(self):
+            self.buy(stop=112, limit=113, size=1)
+            self.sell(stop=107, limit=105, size=1)
+            yield
+
+        stats = self._Backtest(coroutine).run()
+        self.assertListEqual(stats._trades.filter(like='Price').stack().tolist(), [112, 107])
+
+    def test_autoclose_trades_on_finish(self):
+        def coroutine(self):
+            yield self.buy()
+
+        stats = self._Backtest(coroutine).run()
+        self.assertEqual(len(stats._trades), 1)
+
 
 class TestOptimize(TestCase):
     def test_optimize(self):
@@ -446,6 +514,7 @@ class TestOptimize(TestCase):
         self.assertRaises(TypeError, bt.optimize, maximize=15, **OPT_PARAMS)
         self.assertRaises(TypeError, bt.optimize, constraint=15, **OPT_PARAMS)
         self.assertRaises(ValueError, bt.optimize, constraint=lambda d: False, **OPT_PARAMS)
+        self.assertRaises(ValueError, bt.optimize, return_optimization=True, **OPT_PARAMS)
 
         res = bt.optimize(**OPT_PARAMS)
         self.assertIsInstance(res, pd.Series)
@@ -463,6 +532,40 @@ class TestOptimize(TestCase):
 
         with _tempfile() as f:
             bt.plot(filename=f, open_browser=False)
+
+    def test_method_skopt(self):
+        bt = Backtest(GOOG.iloc[:100], SmaCross)
+        res, heatmap, skopt_results = bt.optimize(
+            fast=range(2, 20), slow=np.arange(2, 20, dtype=object),
+            constraint=lambda p: p.fast < p.slow,
+            max_tries=30,
+            method='skopt',
+            return_optimization=True,
+            return_heatmap=True,
+            random_state=2)
+        self.assertIsInstance(res, pd.Series)
+        self.assertIsInstance(heatmap, pd.Series)
+        self.assertGreater(heatmap.max(), 1.1)
+        self.assertGreater(heatmap.min(), -2)
+        self.assertEqual(-skopt_results.fun, heatmap.max())
+        self.assertEqual(heatmap.index.tolist(), heatmap.dropna().index.unique().tolist())
+
+    def test_max_tries(self):
+        bt = Backtest(GOOG.iloc[:100], SmaCross)
+        OPT_PARAMS = dict(fast=range(2, 10, 2), slow=[2, 5, 7, 9])
+        for method, max_tries, random_state in (('grid', 5, 2),
+                                                ('grid', .3, 2),
+                                                ('skopt', 7, 0),
+                                                ('skopt', .45, 0)):
+            with self.subTest(method=method,
+                              max_tries=max_tries,
+                              random_state=random_state):
+                _, heatmap = bt.optimize(max_tries=max_tries,
+                                         method=method,
+                                         random_state=random_state,
+                                         return_heatmap=True,
+                                         **OPT_PARAMS)
+                self.assertEqual(len(heatmap), 6)
 
     def test_nowrite_df(self):
         # Test we don't write into passed data df by default.
@@ -495,6 +598,7 @@ class TestOptimize(TestCase):
     def test_optimize_invalid_param(self):
         bt = Backtest(GOOG.iloc[:100], SmaCross)
         self.assertRaises(AttributeError, bt.optimize, foo=range(3))
+        self.assertRaises(ValueError, bt.optimize, fast=[])
 
     def test_optimize_no_trades(self):
         bt = Backtest(GOOG, SmaCross)
@@ -527,6 +631,7 @@ class TestPlot(TestCase):
         with _tempfile() as f:
             for p in dict(plot_volume=False,
                           plot_equity=False,
+                          plot_return=True,
                           plot_pl=False,
                           plot_drawdown=True,
                           superimpose=False,
@@ -537,6 +642,14 @@ class TestPlot(TestCase):
                           show_legend=False).items():
                 with self.subTest(param=p[0]):
                     bt.plot(**dict([p]), filename=f, open_browser=False)
+
+    def test_hide_legend(self):
+        bt = Backtest(GOOG.iloc[:100], SmaCross)
+        bt.run()
+        with _tempfile() as f:
+            bt.plot(filename=f, show_legend=False)
+            # Give browser time to open before tempfile is removed
+            time.sleep(5)
 
     def test_resolutions(self):
         with _tempfile() as f:
@@ -685,8 +798,9 @@ class TestLib(TestCase):
         res = resample_apply('D', SMA, EURUSD.Close, 10)
         self.assertEqual(res.name, 'C[D]')
         self.assertEqual(res.count() / res.size, .9634)
-        self.assertEqual(res.iloc[-48:].unique().tolist(),
-                         [1.2426429999999997, 1.2423809999999995, 1.2422749999999998])
+        np.testing.assert_almost_equal(res.iloc[-48:].unique().tolist(),
+                                       [1.242643, 1.242381, 1.242275],
+                                       decimal=6)
 
         def resets_index(*args):
             return pd.Series(SMA(*args).values)
@@ -715,6 +829,13 @@ class TestLib(TestCase):
             plot_heatmaps(heatmap, filename=f)
             time.sleep(5)
 
+    def test_random_ohlc_data(self):
+        generator = random_ohlc_data(GOOG, frac=1)
+        new_data = next(generator)
+        self.assertEqual(list(new_data.index), list(GOOG.index))
+        self.assertEqual(new_data.shape, GOOG.shape)
+        self.assertEqual(list(new_data.columns), list(GOOG.columns))
+
     def test_SignalStrategy(self):
         class S(SignalStrategy):
             def init(self):
@@ -723,7 +844,7 @@ class TestLib(TestCase):
                                 self.data.Close < sma)
 
         stats = Backtest(GOOG, S).run()
-        self.assertEqual(stats['# Trades'], 1180)
+        self.assertIn(stats['# Trades'], (1181, 1182))  # varies on different archs?
 
     def test_TrailingStrategy(self):
         class S(TrailingStrategy):
@@ -739,7 +860,7 @@ class TestLib(TestCase):
                     self.buy()
 
         stats = Backtest(GOOG, S).run()
-        self.assertEqual(stats['# Trades'], 50)
+        self.assertEqual(stats['# Trades'], 51)
 
 
 class TestUtil(TestCase):
@@ -779,19 +900,38 @@ class TestUtil(TestCase):
 
         Backtest(GOOG.iloc[:20], S).run()
 
+    def test_indicators_picklable(self):
+        bt = Backtest(SHORT_DATA, SmaCross)
+        with ProcessPoolExecutor() as executor:
+            stats = executor.submit(Backtest.run, bt).result()
+        assert stats._strategy._indicators[0]._opts, '._opts and .name were not unpickled'
+        bt.plot(results=stats, resample='2d', open_browser=False)
 
-@unittest.skipUnless(
-    os.path.isdir(os.path.join(os.path.dirname(__file__),
-                               '..', '..', 'doc')),
-    "docs dir doesn't exist")
+
 class TestDocs(TestCase):
+    DOCS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'doc')
+
+    @unittest.skipUnless(os.path.isdir(DOCS_DIR), "docs dir doesn't exist")
     def test_examples(self):
-        examples = glob(os.path.join(os.path.dirname(__file__),
-                                     '..', '..', 'doc', 'examples', '*.py'))
+        examples = glob(os.path.join(self.DOCS_DIR, 'examples', '*.py'))
         self.assertGreaterEqual(len(examples), 4)
         with chdir(gettempdir()):
             for file in examples:
-                run_path(file)
+                with self.subTest(example=os.path.basename(file)):
+                    run_path(file)
+
+    def test_backtest_run_docstring_contains_stats_keys(self):
+        stats = Backtest(SHORT_DATA, SmaCross).run()
+        for key in stats.index:
+            self.assertIn(key, Backtest.run.__doc__)
+
+    def test_readme_contains_stats_keys(self):
+        with open(os.path.join(os.path.dirname(__file__),
+                               '..', '..', 'README.md')) as f:
+            readme = f.read()
+        stats = Backtest(SHORT_DATA, SmaCross).run()
+        for key in stats.index:
+            self.assertIn(key, readme)
 
 
 if __name__ == '__main__':
