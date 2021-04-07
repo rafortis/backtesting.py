@@ -506,7 +506,7 @@ class Trade:
     When an `Order` is filled, it results in an active `Trade`.
     Find active trades in `Strategy.trades` and closed, settled trades in `Strategy.closed_trades`.
     """
-    def __init__(self, broker: '_Broker', size: int, entry_price: float, entry_bar):
+    def __init__(self, broker: '_Broker', size: int, entry_price: float, entry_bar, teorical_price: float):
         self.__broker = broker
         self.__size = size
         self.__entry_price = entry_price
@@ -517,6 +517,9 @@ class Trade:
         self.__tp_order: Optional[Order] = None
         self.__exit_type = "Saida por max" # type: Optional[String]
         self.__entry_rule = 0 # type: Optional[int]
+        self.__teorical_entry_price = teorical_price
+        self.__teorical_exit_price: Optional[float] = None
+        self.__trade_costs: Optional[float] = None
 
     def __repr__(self):
         return f'<Trade size={self.__size} time={self.__entry_bar}-{self.__exit_bar or ""} ' \
@@ -553,6 +556,26 @@ class Trade:
     @motivoEntrada.setter
     def motivoEntrada(self, entryRule):
         self.__entry_rule = entryRule
+
+    @property
+    def tradeCosts(self) -> float: 
+        price = self.__teorical_exit_price or self.__broker.last_price
+        teorical_pl = self.__size * (price - self.__teorical_entry_price)
+        #print('teorical: ' + str(teorical_pl) + ' = ' + str(self.__size) + ' *'  '( ' + str(price) + '-' +  str(self.__teorical_entry_price) +')')
+        price_calc = self.__exit_price or self.__broker.last_price
+        pl_calc = (self.__size * (price_calc - self.__entry_price))
+        #print('real: ' + str(pl_calc) + ' = ' + str(self.__size) + ' *'  '( ' + str(price_calc) + '-' +  str(self.__entry_price) +')')
+        return (teorical_pl - pl_calc) + self.__broker._fixedCommission
+        
+
+    @tradeCosts.setter
+    def tradeCosts(self, tradeCosts):
+        self.__trade_costs = tradeCosts
+
+    @property
+    def teorical_exit_price(self) -> Optional[float]:
+        """Teorical Trade exit price (or None if the trade is still active)."""
+        return self.__teorical_exit_price
 
     @property
     def size(self):
@@ -679,7 +702,7 @@ class Trade:
 
 class _Broker:
     def __init__(self, *, data, cash, commission, margin,
-                 trade_on_close, hedging, exclusive_orders, index, tradeOnHit):
+                 trade_on_close, hedging, exclusive_orders, index, tradeOnHit, slippage, fixedCommission):
         assert 0 < cash, f"cash should be >0, is {cash}"
         assert 0 <= commission < .1, f"commission should be between 0-10%, is {commission}"
         assert 0 < margin <= 1, f"margin should be between 0 and 1, is {margin}"
@@ -691,7 +714,8 @@ class _Broker:
         self._hedging = hedging
         self._exclusive_orders = exclusive_orders
         self._trade_on_hit = tradeOnHit
-
+        self._slippage = slippage
+        self._fixedCommission = fixedCommission
         self._equity = np.tile(np.nan, len(index))
         self.orders: List[Order] = []
         self.trades: List[Trade] = []
@@ -719,20 +743,24 @@ class _Broker:
         tp = tp and float(tp)
 
         is_long = size > 0
-        adjusted_price = self._adjusted_price(size)
+        adjusted_price = self._adjusted_price(size, limit)
+
+        order = Order(self, size, limit, stop, sl, tp, trade)
 
         if is_long:
             if not (sl or -np.inf) < (limit or stop or adjusted_price) < (tp or np.inf):
-                raise ValueError(
-                    "Long orders require: "
+                print(
+                    "Order canceled Long orders require: "
                     f"SL ({sl}) < LIMIT ({limit or stop or adjusted_price}) < TP ({tp})")
+                return order
         else:
             if not (tp or -np.inf) < (limit or stop or adjusted_price) < (sl or np.inf):
-                raise ValueError(
-                    "Short orders require: "
+                #raise ValueError(
+                print(
+                    "Order canceled Short orders require: "
                     f"TP ({tp}) < LIMIT ({limit or stop or adjusted_price}) < SL ({sl})")
+                return order
 
-        order = Order(self, size, limit, stop, sl, tp, trade)
         # Put the new order in the order queue,
         # inserting SL/TP/trade-closing orders in-front
         if trade:
@@ -756,12 +784,19 @@ class _Broker:
         """ Price at the last (current) close. """
         return self._data.Close[-1]
 
-    def _adjusted_price(self, size=None, price=None) -> float:
+    @property
+    def commission(self) -> float:        
+        return self._commission
+
+    def _adjusted_price(self, size=None, limit=None, price=None) -> float:
         """
         Long/short `price`, adjusted for commisions.
         In long positions, the adjusted price is a fraction higher, and vice versa.
         """
-        return (price or self.last_price) * (1 + copysign(self._commission, size))
+        if limit:            
+            return round((price or self.last_price) * (1 + copysign(0.0, size)),2)
+        else:
+            return round((price or self.last_price) * (1 + copysign((self._slippage), size)),2)
 
     @property
     def equity(self) -> float:
@@ -785,7 +820,7 @@ class _Broker:
         if equity <= 0:
             assert self.margin_available <= 0
             for trade in self.trades:
-                self._close_trade(trade, self._data.Close[-1], i)
+                self._close_trade(trade, self._data.Close[-1], i, self._data.Close[-1])
             self._cash = 0
             self._equity[i:] = 0
             raise _OutOfMoneyError
@@ -860,7 +895,7 @@ class _Broker:
                 size = copysign(min(abs(_prev_size), abs(order.size)), order.size)
                 # If this trade isn't already closed (e.g. on multiple `trade.close(.5)` calls)
                 if trade in self.trades:
-                    self._reduce_trade(trade, price, size, time_index)
+                    self._reduce_trade(trade, self._adjusted_price(order.size, order.limit, price), size, time_index, price)
                     assert order.size != -_prev_size or trade not in self.trades
                 if order in (trade._sl_order,
                              trade._tp_order):
@@ -876,7 +911,7 @@ class _Broker:
 
             # Adjust price to include commission (or bid-ask spread).
             # In long positions, the adjusted price is a fraction higher, and vice versa.
-            adjusted_price = self._adjusted_price(order.size, price)
+            adjusted_price = self._adjusted_price(order.size, order.limit, price)
 
             # If order size was specified proportionally,
             # precompute true size in units, accounting for margin and spread/commissions
@@ -903,12 +938,12 @@ class _Broker:
                     # Order size greater than this opposite-directed existing trade,
                     # so it will be closed completely
                     if abs(need_size) >= abs(trade.size):
-                        self._close_trade(trade, price, time_index)
+                        self._close_trade(trade, adjusted_price, time_index, price)
                         need_size += trade.size
                     else:
                         # The existing trade is larger than the new order,
                         # so it will only be closed partially
-                        self._reduce_trade(trade, price, need_size, time_index)
+                        self._reduce_trade(trade, adjusted_price, need_size, time_index, price)
                         need_size = 0
 
                     if not need_size:
@@ -921,7 +956,7 @@ class _Broker:
 
             # Open a new trade
             if need_size:
-                self._open_trade(adjusted_price, need_size, order.sl, order.tp, time_index)
+                self._open_trade(adjusted_price, need_size, order.sl, order.tp, time_index, price)
 
                 # We need to reprocess the SL/TP orders newly added to the queue.
                 # This allows e.g. SL hitting in the same bar the order was open.
@@ -947,7 +982,7 @@ class _Broker:
         if reprocess_orders:
             self._process_orders()
 
-    def _reduce_trade(self, trade: Trade, price: float, size: float, time_index: int):
+    def _reduce_trade(self, trade: Trade, price: float, size: float, time_index: int, teoricalprice: float):
         assert trade.size * size < 0
         assert abs(trade.size) >= abs(size)
 
@@ -967,20 +1002,20 @@ class _Broker:
             close_trade = trade._copy(size=-size, sl_order=None, tp_order=None)
             self.trades.append(close_trade)
 
-        self._close_trade(close_trade, price, time_index)
+        self._close_trade(close_trade, price, time_index, teoricalprice)
 
-    def _close_trade(self, trade: Trade, price: float, time_index: int):
+    def _close_trade(self, trade: Trade, price: float, time_index: int, teoricalprice: float):
         self.trades.remove(trade)
         if trade._sl_order:
             self.orders.remove(trade._sl_order)
         if trade._tp_order:
             self.orders.remove(trade._tp_order)
 
-        self.closed_trades.append(trade._replace(exit_price=price, exit_bar=time_index))
+        self.closed_trades.append(trade._replace(exit_price=price, exit_bar=time_index, teorical_exit_price=teoricalprice))
         self._cash += trade.pl
 
-    def _open_trade(self, price: float, size: int, sl: float, tp: float, time_index: int):
-        trade = Trade(self, size, price, time_index)
+    def _open_trade(self, price: float, size: int, sl: float, tp: float, time_index: int, teoricalprice: float):
+        trade = Trade(self, size, price, time_index, teoricalprice)
         self.trades.append(trade)
         # Create SL/TP (bracket) orders.
         # Make sure SL order is created first so it gets adversarially processed before TP order
@@ -1008,6 +1043,7 @@ class Backtest:
                  *,
                  cash: float = 10_000,
                  commission: float = .0,
+                 slippage: float = .0005,
                  margin: float = 1.,
                  trade_on_close=False,
                  hedging=False,
@@ -1114,11 +1150,12 @@ class Backtest:
             _Broker, cash=cash, commission=commission, margin=margin,
             trade_on_close=trade_on_close, hedging=hedging,
             exclusive_orders=exclusive_orders, index=data.index,
-            tradeOnHit=tradeOnHit,
+            tradeOnHit=tradeOnHit, slippage=slippage, fixedCommission=fixedCommission
         )
         self._strategy = strategy
         self._results = None
         self._fixedCommision = fixedCommission
+        self._slippage = slippage
         self._boxSize = boxSize
 
     def run(self, **kwargs) -> pd.Series:
@@ -1563,12 +1600,14 @@ class Backtest:
             'ExitTime': [t.exit_time for t in trades],
             'MotivoEntrada': [t.motivoEntrada for t in trades],
             'MotivoSaida': [t.motivoSaida for t in trades],
+            'TradeCosts': [t.tradeCosts for t in trades],
         })
         trades_df['Duration'] = trades_df['ExitTime'] - trades_df['EntryTime']
 
         pl = trades_df['PnL']
         returns = trades_df['ReturnPct']
         durations = trades_df['Duration']
+        costs = trades_df['TradeCosts']
 
         def _round_timedelta(value, _period=_data_period(index)):
             if not isinstance(value, pd.Timedelta):
@@ -1650,7 +1689,8 @@ class Backtest:
         s.loc['Max. Drawdown Duration'] = _round_timedelta(dd_dur.max())
         s.loc['Avg. Drawdown Duration'] = _round_timedelta(dd_dur.mean())
         s.loc['# Trades'] = n_trades = len(trades)
-        s.loc['# Comissions'] = (-1.0) * (len(trades)*self._fixedCommision)
+        s.loc['Comissions'] = (-1.0) * (len(trades)*self._fixedCommision)
+        s.loc['Total Costs'] = (-1.0) * (costs.sum())
         s.loc['Win Rate [%]'] = np.nan if not n_trades else (pl > 0).sum() / n_trades * 100  # noqa: E501
         s.loc['Best Trade [%]'] = returns.max() * 100
         s.loc['Worst Trade [%]'] = returns.min() * 100
