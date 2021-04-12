@@ -641,13 +641,13 @@ class Trade:
     def pl(self):
         """Trade profit (positive) or loss (negative) in cash units."""
         price = self.__exit_price or self.__broker.last_price
-        return self.__size * (price - self.__entry_price)
+        return (self.__size * (price - self.__entry_price)) - self.__broker._fixedCommission
 
     @property
     def pl_pct(self):
         """Trade profit (positive) or loss (negative) in percent."""
         price = self.__exit_price or self.__broker.last_price
-        return copysign(1, self.__size) * (price / self.__entry_price - 1)
+        return (copysign(1, self.__size) * (price / self.__entry_price - 1)) - ((self.__broker._fixedCommission/(copysign(1, self.__size))/self.__entry_price)
 
     @property
     def value(self):
@@ -1627,23 +1627,23 @@ class Backtest:
             have_position[t.entry_bar:t.exit_bar + 1] = 1  # type: ignore
 
         s.loc['Exposure Time [%]'] = have_position.mean() * 100  # In "n bars" time, not index time
-        if (self._fixedCommision > 0.0) :
-            s.loc['Equity Final [$]'] = equity[-1] - (len(trades)*self._fixedCommision)
-        else:
-            s.loc['Equity Final [$]'] = equity[-1]
+        #if (self._fixedCommision > 0.0) :
+        #    s.loc['Equity Final [$]'] = equity[-1] - (len(trades)*self._fixedCommision)
+        #else:
+        s.loc['Equity Final [$]'] = equity[-1]
         s.loc['Equity Peak [$]'] = equity.max()
-        if (self._fixedCommision > 0.0) :
-            s.loc['Net profit'] = (equity[-1] - (len(trades)*self._fixedCommision)) - equity[0]
-        else:
-            s.loc['Net profit'] = equity[-1] - equity[0]
-        if (self._fixedCommision > 0.0) :
-            s.loc['Return [%]'] = ((equity[-1] - (len(trades)*self._fixedCommision)) - equity[0]) / equity[0] * 100
-        else:
-            s.loc['Return [%]'] = (equity[-1] - equity[0]) / equity[0] * 100
-        if (self._fixedCommision > 0.0) :
-            s.loc['Return Box[%]'] = ((equity[-1] - (len(trades)*self._fixedCommision)) - equity[0]) / self._boxSize * 100
-        else:
-            s.loc['Return Box[%]'] = (equity[-1] - equity[0]) / self._boxSize * 100
+        #if (self._fixedCommision > 0.0) :
+        #    s.loc['Net profit'] = (equity[-1] - (len(trades)*self._fixedCommision)) - equity[0]
+        #else:
+        s.loc['Net profit'] = equity[-1] - equity[0]
+        #if (self._fixedCommision > 0.0) :
+        #    s.loc['Return [%]'] = ((equity[-1] - (len(trades)*self._fixedCommision)) - equity[0]) / equity[0] * 100
+        #else:
+        s.loc['Return [%]'] = (equity[-1] - equity[0]) / equity[0] * 100
+        #if (self._fixedCommision > 0.0) :
+        #    s.loc['Return Box[%]'] = ((equity[-1] - (len(trades)*self._fixedCommision)) - equity[0]) / self._boxSize * 100
+        #else:
+        s.loc['Return Box[%]'] = (equity[-1] - equity[0]) / self._boxSize * 100
         c = data.Close.values
         s.loc['Yearly Return[%]'] = (s.loc['Return [%]'])/s.loc['Years']
         s.loc['Yearly Return Box[%]'] = (s.loc['Return Box[%]'])/s.loc['Years']
